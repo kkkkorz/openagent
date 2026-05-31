@@ -9,9 +9,9 @@ else
     export GOPROXY="https://goproxy.cn,direct"
 fi
 
-VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
-COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
-BUILD_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
+COMMIT="${COMMIT:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
+BUILD_DATE="${BUILD_DATE:-$(date -u +"%Y-%m-%dT%H:%M:%SZ")}"
 LDFLAGS="-w -s -X github.com/the-open-agent/openagent/internal/cli.Version=${VERSION} -X github.com/the-open-agent/openagent/internal/cli.Commit=${COMMIT} -X github.com/the-open-agent/openagent/internal/cli.BuildDate=${BUILD_DATE}"
 
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o server_linux_amd64 .
