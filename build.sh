@@ -10,7 +10,9 @@ else
 fi
 
 VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
-LDFLAGS="-w -s -X github.com/the-open-agent/openagent/internal/cli.Version=${VERSION}"
+COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+BUILD_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+LDFLAGS="-w -s -X github.com/the-open-agent/openagent/internal/cli.Version=${VERSION} -X github.com/the-open-agent/openagent/internal/cli.Commit=${COMMIT} -X github.com/the-open-agent/openagent/internal/cli.BuildDate=${BUILD_DATE}"
 
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o server_linux_amd64 .
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o server_linux_arm64 .

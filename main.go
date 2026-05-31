@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -92,8 +93,9 @@ func main() {
 	beego.BConfig.WebConfig.Session.SessionCookieSameSite = http.SameSiteLaxMode
 
 	var logAdapter string
+	logConfig := conf.GetConfigString("logConfig")
 	logConfigMap := make(map[string]interface{})
-	err := json.Unmarshal([]byte(conf.GetConfigString("logConfig")), &logConfigMap)
+	err := json.Unmarshal([]byte(logConfig), &logConfigMap)
 	if err != nil {
 		panic(err)
 	}
@@ -105,8 +107,14 @@ func main() {
 	}
 	if logAdapter == "console" {
 		logs.Reset()
+		if runtime.GOOS == "windows" {
+			logConfigMap["color"] = false
+			if normalizedLogConfig, err := json.Marshal(logConfigMap); err == nil {
+				logConfig = string(normalizedLogConfig)
+			}
+		}
 	}
-	err = logs.SetLogger(logAdapter, conf.GetConfigString("logConfig"))
+	err = logs.SetLogger(logAdapter, logConfig)
 	if err != nil {
 		panic(err)
 	}
