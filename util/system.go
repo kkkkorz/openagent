@@ -245,11 +245,25 @@ func GetVersionInfo() (*VersionInfo, error) {
 	}
 
 	res = &VersionInfo{
-		Version:      version,
+		Version:      normalizeVersionInfoVersion(version, ref.Hash().String()),
 		CommitId:     ref.Hash().String(),
 		CommitOffset: commitOffset,
 	}
 	return res, nil
+}
+
+func normalizeVersionInfoVersion(version string, commitId string) string {
+	if version != "" {
+		return version
+	}
+	return shortCommitId(commitId)
+}
+
+func shortCommitId(commitId string) string {
+	if len(commitId) <= 8 {
+		return commitId
+	}
+	return commitId[:8]
 }
 
 func GetVersionInfoFromBuild() (*VersionInfo, bool) {
@@ -271,6 +285,7 @@ func GetVersionInfoFromBuild() (*VersionInfo, bool) {
 	if !hasCommit {
 		commitId = ""
 	}
+	version = normalizeVersionInfoVersion(version, commitId)
 
 	return &VersionInfo{
 		Version:      version,
