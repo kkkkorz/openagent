@@ -33,14 +33,22 @@ type pptxWriteBuiltin struct{}
 
 type pptxWriteArgs struct {
 	Path      string          `json:"path"`
-	Script    string          `json:"script"`
+	Script    string          `json:"script,omitempty"`
+	HTML      string          `json:"html,omitempty"`
+	Slides    json.RawMessage `json:"slides,omitempty"`
+	Width     int             `json:"width,omitempty"`
+	Height    int             `json:"height,omitempty"`
 	AssetsDir string          `json:"assets_dir,omitempty"`
 	Data      json.RawMessage `json:"data,omitempty"`
 }
 
 type pptxWriteWorkerSpec struct {
 	Path       string          `json:"path"`
-	ScriptPath string          `json:"script_path"`
+	ScriptPath string          `json:"script_path,omitempty"`
+	HTML       string          `json:"html,omitempty"`
+	Slides     json.RawMessage `json:"slides,omitempty"`
+	Width      int             `json:"width,omitempty"`
+	Height     int             `json:"height,omitempty"`
 	AssetsDir  string          `json:"assets_dir,omitempty"`
 	Data       json.RawMessage `json:"data,omitempty"`
 }
@@ -61,11 +69,14 @@ type pptxWorkerCandidate struct {
 func (t *pptxWriteBuiltin) GetName() string { return "pptx_write" }
 
 func (t *pptxWriteBuiltin) GetDescription() string {
-	return `Create a designed PowerPoint (.pptx) file by running a PptxGenJS build script.
+	return `Create a designed PowerPoint (.pptx) file either by running a PptxGenJS build script or by rendering HTML slides to images and embedding them into a .pptx.
 - path (required): output path for the .pptx file. Absolute paths are used as-is. Relative paths or bare filenames are resolved inside the current user's Documents folder.
-- script (required): JavaScript module content that exports default async function build(pptx, ctx) or a named build function. The script adds slides to the provided PptxGenJS instance.
+- script: JavaScript module content that exports default async function build(pptx, ctx) or a named build function. The script adds slides to the provided PptxGenJS instance.
+- html: a single complete HTML slide to render as a full-slide screenshot.
+- slides: an array of HTML slide objects, each with html and optional notes/title fields. Use this for HTML/CSS-authored decks.
+- width/height: optional HTML render viewport in pixels. Defaults to 1280x720.
 - data (optional): JSON value passed to ctx.data inside the script for content or configuration.
-- assets_dir (optional): base directory for ctx.resolveAsset() and ctx.imageData() calls.
+- assets_dir (optional): base directory for ctx.resolveAsset() and ctx.imageData() calls, and for relative assets inside HTML slides.
 Creates the file if it does not exist; overwrites otherwise.`
 }
 
@@ -79,7 +90,41 @@ func (t *pptxWriteBuiltin) GetInputSchema() interface{} {
 			},
 			"script": map[string]interface{}{
 				"type":        "string",
-				"description": "JavaScript module content exporting default build(pptx, ctx) or named build(pptx, ctx).",
+				"description": "JavaScript module content exporting default build(pptx, ctx) or named build(pptx, ctx). Required unless html or slides is provided.",
+			},
+			"html": map[string]interface{}{
+				"type":        "string",
+				"description": "Single complete HTML slide to render as a full-slide screenshot and embed in the PPTX.",
+			},
+			"slides": map[string]interface{}{
+				"type":        "array",
+				"description": "HTML slide objects for screenshot-based PPTX export.",
+				"items": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"html": map[string]interface{}{
+							"type":        "string",
+							"description": "Complete HTML for this slide.",
+						},
+						"notes": map[string]interface{}{
+							"type":        "string",
+							"description": "Optional speaker notes for this slide.",
+						},
+						"title": map[string]interface{}{
+							"type":        "string",
+							"description": "Optional slide title metadata.",
+						},
+					},
+					"required": []string{"html"},
+				},
+			},
+			"width": map[string]interface{}{
+				"type":        "integer",
+				"description": "Optional HTML render viewport width in pixels. Defaults to 1280.",
+			},
+			"height": map[string]interface{}{
+				"type":        "integer",
+				"description": "Optional HTML render viewport height in pixels. Defaults to 720.",
 			},
 			"data": map[string]interface{}{
 				"type":        "object",
@@ -90,12 +135,12 @@ func (t *pptxWriteBuiltin) GetInputSchema() interface{} {
 				"description": "Optional asset base directory for ctx.resolveAsset() and ctx.imageData().",
 			},
 		},
-		"required": []string{"path", "script"},
+		"required": []string{"path"},
 	}
 }
 
-// Execute writes the inline build script to a temporary module, then runs the
-// local Node/PptxGenJS worker.
+// Execute writes the inline build script when needed, then runs the local
+// Node/PptxGenJS worker.
 func (t *pptxWriteBuiltin) Execute(ctx context.Context, arguments map[string]interface{}) (*protocol.CallToolResult, error) {
 	argBytes, err := json.Marshal(arguments)
 	if err != nil {
@@ -112,8 +157,10 @@ func (t *pptxWriteBuiltin) Execute(ctx context.Context, arguments map[string]int
 		return officeToolError("Missing required parameter: path"), nil
 	}
 
-	if strings.TrimSpace(args.Script) == "" {
-		return officeToolError("Missing required parameter: script"), nil
+	args.Script = strings.TrimSpace(args.Script)
+	args.HTML = strings.TrimSpace(args.HTML)
+	if args.Script == "" && args.HTML == "" && len(args.Slides) == 0 {
+		return officeToolError("Missing required parameter: script, html, or slides"), nil
 	}
 
 	args.AssetsDir = strings.TrimSpace(args.AssetsDir)
@@ -144,24 +191,31 @@ func (t *pptxWriteBuiltin) Execute(ctx context.Context, arguments map[string]int
 
 	args.Path = ResolveOutputPath(args.Path)
 
-	scriptFile, err := os.CreateTemp("", "openagent-pptx-build-*.mjs")
-	if err != nil {
-		return officeToolError(fmt.Sprintf("Failed to create build script: %s", err.Error())), nil
-	}
-	scriptPath := scriptFile.Name()
-	defer os.Remove(scriptPath)
+	var scriptPath string
+	if args.Script != "" {
+		scriptFile, err := os.CreateTemp("", "openagent-pptx-build-*.mjs")
+		if err != nil {
+			return officeToolError(fmt.Sprintf("Failed to create build script: %s", err.Error())), nil
+		}
+		scriptPath = scriptFile.Name()
+		defer os.Remove(scriptPath)
 
-	if _, err := scriptFile.WriteString(args.Script); err != nil {
-		scriptFile.Close()
-		return officeToolError(fmt.Sprintf("Failed to write build script: %s", err.Error())), nil
-	}
-	if err := scriptFile.Close(); err != nil {
-		return officeToolError(fmt.Sprintf("Failed to close build script: %s", err.Error())), nil
+		if _, err := scriptFile.WriteString(args.Script); err != nil {
+			scriptFile.Close()
+			return officeToolError(fmt.Sprintf("Failed to write build script: %s", err.Error())), nil
+		}
+		if err := scriptFile.Close(); err != nil {
+			return officeToolError(fmt.Sprintf("Failed to close build script: %s", err.Error())), nil
+		}
 	}
 
 	spec := pptxWriteWorkerSpec{
 		Path:       args.Path,
 		ScriptPath: scriptPath,
+		HTML:       args.HTML,
+		Slides:     args.Slides,
+		Width:      args.Width,
+		Height:     args.Height,
 		AssetsDir:  args.AssetsDir,
 		Data:       args.Data,
 	}

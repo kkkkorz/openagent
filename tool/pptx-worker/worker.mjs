@@ -1,6 +1,8 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { execFile, execFileSync } from 'node:child_process';
 import * as solidIcons from '@fortawesome/free-solid-svg-icons';
 import PptxGenJS from 'pptxgenjs';
 
@@ -125,9 +127,234 @@ function createPresentation() {
   return pptx;
 }
 
+function execFileAsync(file, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, options, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+function chromeCandidates() {
+  const envCandidates = [
+    process.env.OPENAGENT_CHROME_PATH,
+    process.env.CHROME_PATH,
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+  ].filter(Boolean);
+
+  const platformCandidates = process.platform === 'win32'
+    ? [
+        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+        'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+      ]
+    : process.platform === 'darwin'
+      ? [
+          '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+          '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+          '/Applications/Chromium.app/Contents/MacOS/Chromium',
+        ]
+      : [
+          'google-chrome',
+          'google-chrome-stable',
+          'chromium',
+          'chromium-browser',
+          'microsoft-edge',
+        ];
+
+  return [...envCandidates, ...platformCandidates];
+}
+
+function findChromeExecutable() {
+  for (const candidate of chromeCandidates()) {
+    if (path.isAbsolute(candidate)) {
+      if (fs.existsSync(candidate)) return candidate;
+      continue;
+    }
+    try {
+      execFileSync(candidate, ['--version'], { stdio: 'ignore' });
+      return candidate;
+    } catch {
+      // Try the next browser command.
+    }
+  }
+  return '';
+}
+
+function baseHrefForDir(dir) {
+  const resolved = path.resolve(dir || process.cwd());
+  const withSep = resolved.endsWith(path.sep) ? resolved : `${resolved}${path.sep}`;
+  return pathToFileURL(withSep).href;
+}
+
+function htmlWithBase(html, assetsDir) {
+  const source = text(html).trim();
+  if (!source) {
+    throw new Error('HTML slide content is required');
+  }
+
+  const baseTag = `<base href="${escapeXml(baseHrefForDir(assetsDir))}">`;
+  if (/<base\s/i.test(source)) {
+    return source;
+  }
+  if (/<head[^>]*>/i.test(source)) {
+    return source.replace(/<head([^>]*)>/i, `<head$1>${baseTag}`);
+  }
+  if (/<html[^>]*>/i.test(source)) {
+    return source.replace(/<html([^>]*)>/i, `<html$1><head>${baseTag}</head>`);
+  }
+  return `<!doctype html><html><head>${baseTag}<meta charset="utf-8"></head><body>${source}</body></html>`;
+}
+
+function normalizeHtmlSlides(spec) {
+  if (Array.isArray(spec.slides) && spec.slides.length > 0) {
+    return spec.slides.map((item, index) => {
+      if (typeof item === 'string') {
+        return { html: item, title: `Slide ${index + 1}`, notes: '' };
+      }
+      if (!item || typeof item !== 'object') {
+        throw new Error(`slides[${index}] must be a string or object`);
+      }
+      return {
+        html: text(item.html),
+        title: text(item.title || `Slide ${index + 1}`),
+        notes: text(item.notes),
+      };
+    });
+  }
+  if (text(spec.html).trim()) {
+    return [{ html: spec.html, title: 'Slide 1', notes: '' }];
+  }
+  return [];
+}
+
+function htmlViewport(spec) {
+  const width = Number.isFinite(Number(spec.width)) && Number(spec.width) > 0
+    ? Math.round(Number(spec.width))
+    : 1280;
+  const height = Number.isFinite(Number(spec.height)) && Number(spec.height) > 0
+    ? Math.round(Number(spec.height))
+    : 720;
+  return { width, height };
+}
+
+function defineHtmlLayout(pptx, viewport) {
+  const widthIn = 13.333;
+  const heightIn = widthIn * (viewport.height / viewport.width);
+  pptx.defineLayout({ name: 'OPENAGENT_HTML', width: widthIn, height: heightIn });
+  pptx.layout = 'OPENAGENT_HTML';
+  return { w: widthIn, h: heightIn };
+}
+
+async function screenshotHtmlSlide({ chromePath, tmpDir, html, assetsDir, viewport, index }) {
+  const htmlPath = path.join(tmpDir, `slide-${String(index + 1).padStart(3, '0')}.html`);
+  const pngPath = path.join(tmpDir, `slide-${String(index + 1).padStart(3, '0')}.png`);
+  const profileDir = path.join(tmpDir, `chrome-profile-${String(index + 1).padStart(3, '0')}`);
+  fs.writeFileSync(htmlPath, htmlWithBase(html, assetsDir), 'utf8');
+
+  const argsFor = (headlessFlag) => [
+    headlessFlag,
+    '--disable-gpu',
+    '--disable-gpu-sandbox',
+    '--disable-gpu-compositing',
+    '--disable-features=VizDisplayCompositor,UseSkiaRenderer',
+    '--disable-dev-shm-usage',
+    '--disable-extensions',
+    '--disable-background-networking',
+    '--no-sandbox',
+    '--hide-scrollbars',
+    '--no-first-run',
+    '--no-default-browser-check',
+    `--user-data-dir=${profileDir}`,
+    `--window-size=${viewport.width},${viewport.height}`,
+    '--virtual-time-budget=1500',
+    `--screenshot=${pngPath}`,
+    pathToFileURL(htmlPath).href,
+  ];
+
+  try {
+    await execFileAsync(chromePath, argsFor('--headless=new'), { timeout: 30000 });
+  } catch (firstError) {
+    try {
+      await execFileAsync(chromePath, argsFor('--headless'), { timeout: 30000 });
+    } catch (secondError) {
+      const detail = text(secondError.stderr || secondError.message || firstError.message).trim();
+      throw new Error(`failed to render HTML slide ${index + 1} with Chrome: ${detail}`);
+    }
+  }
+
+  if (!fs.existsSync(pngPath)) {
+    throw new Error(`Chrome did not create a screenshot for HTML slide ${index + 1}`);
+  }
+  return `data:image/png;base64,${fs.readFileSync(pngPath).toString('base64')}`;
+}
+
+async function generateHtmlDeck(spec) {
+  if (!spec.path) {
+    throw new Error('path is required');
+  }
+
+  spec.path = path.resolve(spec.path);
+  fs.mkdirSync(path.dirname(spec.path), { recursive: true });
+
+  const slides = normalizeHtmlSlides(spec);
+  if (slides.length === 0) {
+    throw new Error('html or slides is required for HTML PowerPoint export');
+  }
+
+  const chromePath = findChromeExecutable();
+  if (!chromePath) {
+    throw new Error('Chrome or Edge was not found; install Chrome/Edge or set OPENAGENT_CHROME_PATH to enable HTML PowerPoint export');
+  }
+
+  const viewport = htmlViewport(spec);
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openagent-pptx-html-'));
+  const pptx = createPresentation();
+  const slideSize = defineHtmlLayout(pptx, viewport);
+
+  try {
+    for (let i = 0; i < slides.length; i++) {
+      const image = await screenshotHtmlSlide({
+        chromePath,
+        tmpDir,
+        html: slides[i].html,
+        assetsDir: spec.assets_dir || path.dirname(spec.path),
+        viewport,
+        index: i,
+      });
+      const slide = pptx.addSlide();
+      slide.background = { color: 'FFFFFF' };
+      slide.addImage({ data: image, x: 0, y: 0, w: slideSize.w, h: slideSize.h });
+      if (slides[i].notes) {
+        slide.addNotes(slides[i].notes);
+      }
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  await pptx.writeFile({ fileName: spec.path });
+  return {
+    ok: true,
+    path: spec.path,
+    slideCount: slides.length,
+    mode: 'html-screenshot',
+  };
+}
+
 async function generateDeck(spec) {
   if (!spec.path) {
     throw new Error('path is required');
+  }
+  if (text(spec.html).trim() || (Array.isArray(spec.slides) && spec.slides.length > 0)) {
+    return generateHtmlDeck(spec);
   }
   if (!spec.script_path) {
     throw new Error('script_path is required');
@@ -165,7 +392,7 @@ async function main() {
     throw new Error('usage: node worker.mjs <spec.json>');
   }
 
-  const spec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
+  const spec = JSON.parse(fs.readFileSync(specPath, 'utf8').replace(/^\uFEFF/, ''));
   return generateDeck(spec);
 }
 

@@ -5,23 +5,26 @@ description: Create designed, editable PowerPoint .pptx presentations with PptxG
 
 # PowerPoint
 
-Use this skill whenever a PowerPoint deck is involved. For new decks, first design a structured deck specification, then pass a trusted PptxGenJS build script to the `pptx_write` tool.
+Use this skill whenever a PowerPoint deck is involved. For new decks, first design a structured deck specification, then choose either editable PptxGenJS rendering or visual-first HTML rendering with the `pptx_write` tool.
 
 ## Workflow
 
 1. Infer the audience, goal, language, level of detail, and likely presentation setting from the user's request. Make conservative defaults when details are missing.
 2. Create an internal deck specification before writing code: deck thesis, visual system, slide rhythm, slide types, per-slide message, on-slide content, visual treatment, and speaker notes.
 3. Check the deck specification for content quality: each slide has one job, titles are conclusion-oriented, slide text is scannable, layouts vary, and visuals support the message.
-4. Write JavaScript module content that exports `default async function build(pptx, ctx)` or named `build(pptx, ctx)`.
-5. In the script, add slides directly with PptxGenJS. Do not generate HTML for this workflow.
-6. Call `pptx_write` with `path`, `script`, optional `assets_dir`, and optional `data`.
-7. Verify the result with `pptx_read`; for visual QA, convert the PPTX to images if the environment has LibreOffice and Poppler.
+4. Choose the rendering mode:
+   - Use PptxGenJS script mode when editable text/shapes/tables matter.
+   - Use HTML slides mode when visual fidelity, modern CSS layout, or fast high-quality composition matters more than editability.
+5. For script mode, write JavaScript module content that exports `default async function build(pptx, ctx)` or named `build(pptx, ctx)`.
+6. For HTML mode, provide complete HTML/CSS per slide in `html` or `slides`; each slide is rendered as an image and embedded full-slide in the PPTX.
+7. Call `pptx_write` with `path` and either `script`, `html`, or `slides`, plus optional `assets_dir`, `width`, `height`, and `data`.
+8. Verify the result with `pptx_read`; for visual QA, convert the PPTX to images if the environment has LibreOffice and Poppler.
 
 ## Planning Gate
 
 Do not jump straight from the user request to PptxGenJS code. First form a compact deck spec, even if it remains internal. The spec is the quality control layer: it prevents repetitive title-plus-bullet decks and keeps the script focused on rendering a coherent presentation.
 
-When a deck is more than three slides, use `deck-spec.md` and `content-quality.md` as the planning references. For API syntax, use `pptxgenjs.md`.
+When a deck is more than three slides, use `deck-spec.md` and `content-quality.md` as the planning references. For editable API syntax, use `pptxgenjs.md`. For visual-first HTML rendering, use `html-slides.md`.
 
 ## Script Creation
 
@@ -61,6 +64,27 @@ export default async function build(pptx, ctx) {
 }
 ```
 
+HTML mode example:
+
+```json
+{
+  "tool": "pptx_write",
+  "arguments": {
+    "path": "deck.pptx",
+    "width": 1280,
+    "height": 720,
+    "slides": [
+      {
+        "html": "<!doctype html><html><head><style>body{margin:0;width:1280px;height:720px}</style></head><body>...</body></html>",
+        "notes": "Speaker notes"
+      }
+    ]
+  }
+}
+```
+
+HTML slides are screenshot-based: they preserve CSS visual design well, but slide text is not editable inside PowerPoint. Use this intentionally.
+
 `ctx` includes:
 
 - `ctx.data`: JSON data passed from the tool call.
@@ -94,6 +118,7 @@ For API patterns, chart examples, bullets, image sizing, icons, and common file-
 - Load `deck-spec.md` when planning a new deck or revising the structure of an existing deck.
 - Load `content-quality.md` when the user asks for a polished, executive, educational, sales, research, or high-stakes deck.
 - Load `pptxgenjs.md` when implementing the final PptxGenJS script.
+- Load `html-slides.md` when implementing visual-first HTML slides.
 
 ## Required QA
 
