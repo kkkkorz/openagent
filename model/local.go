@@ -66,6 +66,16 @@ func NewLocalModelProvider(typ string, subType string, secretKey string, tempera
 	return p, nil
 }
 
+// normalizeOllamaBaseURL ensures the URL ends with exactly "/v1",
+// regardless of whether the user typed trailing slashes or included "/v1" themselves.
+func normalizeOllamaBaseURL(rawURL string) string {
+	u := strings.TrimRight(rawURL, "/")
+	if !strings.HasSuffix(u, "/v1") {
+		u += "/v1"
+	}
+	return u
+}
+
 func getLocalClientFromUrl(authToken string, url string) *openai.Client {
 	config := openai.DefaultConfig(authToken)
 	config.BaseURL = url
@@ -225,6 +235,8 @@ func (p *LocalModelProvider) QueryText(question string, writer io.Writer, histor
 		client = getAzureClientFromToken(p.deploymentName, p.secretKey, p.providerUrl, p.apiVersion)
 	} else if p.typ == "GitHub" {
 		client = getGitHubClientFromToken(p.secretKey, p.providerUrl)
+	} else if p.typ == "Ollama" {
+		client = getLocalClientFromUrl(p.secretKey, normalizeOllamaBaseURL(p.providerUrl))
 	} else if p.typ == "Custom" || p.typ == "Custom-think" {
 		client = getLocalClientFromUrl(p.secretKey, p.providerUrl)
 	}
@@ -259,7 +271,7 @@ func (p *LocalModelProvider) QueryText(question string, writer io.Writer, histor
 	maxTokens := getContextLength(model)
 
 	modelResult := &ModelResult{}
-	if getOpenAiModelType(p.subType) == "Chat" {
+	if p.typ == "Ollama" || getOpenAiModelType(model) == "Chat" {
 		rawMessages, err := OpenaiGenerateMessages(prompt, question, history, knowledgeMessages, model, maxTokens, lang)
 		if err != nil {
 			return nil, err
@@ -269,7 +281,7 @@ func (p *LocalModelProvider) QueryText(question string, writer io.Writer, histor
 		}
 
 		var messages []openai.ChatCompletionMessage
-		if IsVisionModel(p.subType) {
+		if IsVisionModel(model) {
 			messages, err = OpenaiRawMessagesToGptVisionMessages(rawMessages)
 			if err != nil {
 				return nil, err
@@ -429,7 +441,7 @@ func (p *LocalModelProvider) QueryText(question string, writer io.Writer, histor
 			return nil, err
 		}
 		return modelResult, nil
-	} else if getOpenAiModelType(p.subType) == "imagesGenerations" {
+	} else if getOpenAiModelType(model) == "imagesGenerations" {
 		if strings.HasPrefix(question, "$OpenAgentDryRun$") {
 			return modelResult, nil
 		}
@@ -457,7 +469,7 @@ func (p *LocalModelProvider) QueryText(question string, writer io.Writer, histor
 			return nil, err
 		}
 		return modelResult, nil
-	} else if getOpenAiModelType(p.subType) == "Completion" {
+	} else if getOpenAiModelType(model) == "Completion" {
 		respStream, err := client.CreateCompletionStream(
 			ctx,
 			openai.CompletionRequest{
@@ -517,6 +529,6 @@ func (p *LocalModelProvider) QueryText(question string, writer io.Writer, histor
 		modelResult, err = getDefaultModelResult(model, question, response.String())
 		return modelResult, nil
 	} else {
-		return nil, fmt.Errorf(i18n.Translate(lang, "model:QueryText() error: unknown model type: %s"), p.subType)
+		return nil, fmt.Errorf(i18n.Translate(lang, "model:QueryText() error: unknown model type: %s"), model)
 	}
 }

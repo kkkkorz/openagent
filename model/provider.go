@@ -118,7 +118,7 @@ func GetModelProvider(typ string, subType string, clientId string, clientSecret 
 	var p ModelProvider
 	var err error
 	if typ == "Ollama" {
-		p, err = NewLocalModelProvider("Custom-think", "custom-model", "randomString", temperature, topP, 0, 0, providerUrl, subType, inputPricePerThousandTokens, outputPricePerThousandTokens, Currency)
+		p, err = NewLocalModelProvider("Ollama", subType, "randomString", temperature, topP, 0, 0, providerUrl, subType, inputPricePerThousandTokens, outputPricePerThousandTokens, Currency)
 	} else if typ == "Local" {
 		p, err = NewLocalModelProvider(typ, subType, clientSecret, temperature, topP, frequencyPenalty, presencePenalty, providerUrl, compatibleProvider, inputPricePerThousandTokens, outputPricePerThousandTokens, Currency)
 	} else if typ == "OpenAI" {
@@ -173,6 +173,8 @@ func GetModelProvider(typ string, subType string, clientId string, clientSecret 
 		p, err = NewGitHubModelProvider(typ, subType, clientSecret, temperature, topP, frequencyPenalty, presencePenalty)
 	} else if typ == "Writer" {
 		p, err = NewWriterModelProvider(subType, clientSecret, temperature, topP)
+	} else if typ == "OpenCode" {
+		p, err = NewOpenCodeProvider(providerUrl, clientSecret)
 	} else {
 		return nil, nil
 	}
