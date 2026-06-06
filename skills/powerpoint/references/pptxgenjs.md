@@ -19,6 +19,44 @@ export default async function build(pptx, ctx) {
 }
 ```
 
+## Deck Spec Driven Structure
+
+For medium or large decks, prefer passing a structured deck spec through `ctx.data` and rendering it. This keeps content planning separate from drawing instructions.
+
+```javascript
+export default async function build(pptx, ctx) {
+  pptx.layout = "LAYOUT_WIDE";
+  pptx.title = ctx.data?.title || ctx.data?.deckSpec?.title || "Presentation";
+
+  const deck = ctx.data?.deckSpec || {
+    title: "Presentation",
+    slides: [
+      {
+        type: "cover",
+        title: "Presentation",
+        message: "A clear point of view",
+        content: [],
+        speakerNotes: "",
+      },
+    ],
+  };
+
+  for (const item of deck.slides) {
+    const slide = pptx.addSlide();
+    slide.background = { color: "FFFFFF" };
+    if (item.type === "cover") {
+      slide.addText(item.title, { x: 0.7, y: 2.4, w: 9.2, h: 0.7, fontSize: 42, bold: true, margin: 0 });
+      slide.addText(item.message || "", { x: 0.72, y: 3.2, w: 8.4, h: 0.35, fontSize: 17, color: "475569", margin: 0 });
+    } else {
+      slide.addText(item.title || item.message, { x: 0.65, y: 0.45, w: 11.5, h: 0.45, fontSize: 28, bold: true, margin: 0 });
+    }
+    if (item.speakerNotes) slide.addNotes(item.speakerNotes);
+  }
+}
+```
+
+Use the deck spec to decide slide type, message, content, visual, and notes. Use PptxGenJS only to render that plan.
+
 Useful layouts:
 
 - `LAYOUT_WIDE`: 13.333 x 7.5 in.
@@ -145,6 +183,17 @@ Prefer a small set of chart colors from the deck palette. Hide legends when ther
 - Data slide: one large chart plus two or three stat callouts.
 - Closing: strong statement, next action, or summary trio.
 
+## Content-to-Layout Mapping
+
+- Use a chart when the message depends on quantitative change, ranking, distribution, or proportion.
+- Use a table when the message compares options across repeated criteria.
+- Use cards when the slide lists parallel themes, capabilities, risks, or recommendations.
+- Use a timeline for dates, phases, milestones, or maturity paths.
+- Use a process flow for cause-effect, operations, decision paths, or system steps.
+- Use a quote/callout only for one memorable sentence, not a paragraph.
+
+Do not use the same layout for more than two consecutive content slides unless the user asked for a template-like deck.
+
 ## QA Checklist
 
 - Slide order and text match the requested content.
@@ -153,4 +202,7 @@ Prefer a small set of chart colors from the deck palette. Hide legends when ther
 - Contrast is readable on every background.
 - Margins are at least 0.5 in unless intentionally full bleed.
 - Layouts vary; the deck does not read as repeated title-plus-bullets.
+- Titles express messages, not only topics, wherever practical.
+- Speaker notes contain the narrative when on-slide content is intentionally concise.
+- No placeholder text, generic filler, or invented data appears.
 - Generated file opens and `pptx_read` returns the expected text.
